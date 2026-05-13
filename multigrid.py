@@ -1,15 +1,12 @@
 import torch
 import torch.nn as nn
 from dataclasses import dataclass
-from utils import interpolate, restrict, laplace_smoothen
+from utils import interpolate, restrict, laplace_smoothen, poisson_smoothen
+from utils import BoundaryCondition, NeumannBoundaryCondition, neumann_nd
+import scipy.sparse.linalg as spla
+import numpy as np
 
-@dataclass
-class BoundaryCondition:
-    mask: torch.Tensor
-    vals: torch.Tensor
 
-    def restrict(self) -> BoundaryCondition:
-        return BoundaryCondition(restrict(self.mask), restrict(self.vals))
 
 def laplace_jacobi_step(f: torch.Tensor, bc: BoundaryCondition):
     return torch.where(bc.mask, bc.vals, laplace_smoothen(f))
@@ -21,6 +18,22 @@ def laplace_jacobi_smoothen(f: torch.Tensor, bc: BoundaryCondition, tol=1e-3, ma
             return f_smooth
         f = f_smooth
     return f
+
+
+def poisson_jacobi_smoothen(u: torch.Tensor, f: torch.Tensor, bc: NeumannBoundaryCondition, h: float, tol=1e-3, maxiter=200) -> torch.Tensor:
+    for _ in range(maxiter):
+        u_smooth = poisson_smoothen(u, f, bc, h)
+        if torch.mean(torch.abs(u - u_smooth)) <= tol:
+            return u_smooth
+        u = u_smooth
+    return u
+
+def poisson_exact_solve(f: torch.Tensor, bc: NeumannBoundaryCondition, h: float, u: torch.Tensor | None = None) -> torch.Tensor:
+    L = spla.LaplacianNd(f.shape, boundary_conditions='neumann').tosparse()
+    b = (h**2) * f - h * neumann_nd(bc)
+    solution, *_ = spla.lsqr(L, b.flatten(), x0=u.flatten()) if u is not None else spla.lsqr(L, b.flatten())
+    return torch.from_numpy(solution).reshape_as(f).float()
+    
 
 ### Laplace Solvers ###
 
@@ -59,3 +72,42 @@ def laplace_full_multigrid_v_cycle(f: torch.Tensor, bc: BoundaryCondition, depth
     f = interpolate(laplace_full_multigrid_v_cycle(restrict(f), bc.restrict(), depth-1, tol, maxiter))
     f = laplace_multigrid_v_cycle(f, bc, depth, tol, maxiter)
     return f
+
+
+### Poisson solvers ###
+
+# # V-Cycle
+# def poisson_multigrid_v_cycle(u: torch.Tensor, f: torch.Tensor, h: float, depth=4, tol=1e-5, maxiter=200) -> torch.Tensor:
+#     if not depth:
+#         return poisson_jacobi_smoothen(u, f, h, tol, maxiter)
+#     f = poisson_jacobi_smoothen(u, f, h, tol, maxiter)
+#     f = interpolate(poisson_multigrid_v_cycle(restrict(u), restrict(f), 2*h, depth-1, tol, maxiter))
+#     f = poisson_jacobi_smoothen(u, f, h, tol, maxiter)
+#     return f
+
+# # Full Multigrid V-Cycle
+# def poisson_full_multigrid_v_cycle(u: torch.Tensor, f: torch.Tensor, h: float, depth=4, tol=1e-5, maxiter=200) -> torch.Tensor:
+#     if not depth:
+#         return poisson_jacobi_smoothen(u, f, h, tol, maxiter)
+#     f = interpolate(poisson_full_multigrid_v_cycle(restrict(u), restrict(f), 2*h, depth-1, tol, maxiter))
+#     f = poisson_multigrid_v_cycle(u, f, h, depth, tol, maxiter)
+#     return f
+
+def poisson_multigrid(f: torch.Tensor, bc: NeumannBoundaryCondition, h: float, depth: int = 4, u: torch.Tensor | None = None, tol=1e-5, maxiter=200) -> torch.Tensor:
+    if not depth:
+        return poisson_exact_solve(f, bc, h, u)
+    u = interpolate(poisson_multigrid(restrict(f), bc.restrict(), 2*h, depth-1, restrict(u) if u is not None else None))
+    u = poisson_jacobi_smoothen(u, f, bc, h, tol, maxiter)
+    return u
+
+def integrate_vf_on_grid(v, grid: torch.Tensor, multigrid_depth=4, tol=1e-5, maxiter=200) -> torch.Tensor:
+    h1 = grid[0, 1, 0] - grid[0, 0, 0]
+    h2 = grid[1, 0, 1] - grid[0, 0, 1]
+    assert h1 == h2, f'Grid must be uniform! Horizontal grid spacing: {h1} does not match vertical grid spacing: {h2}.'
+    div_v = torch.einsum(
+        'x whx->wh',
+        torch.autograd.functional.jacobian(lambda x: v(x).sum((0, 1)), grid)
+    )
+    bcond = NeumannBoundaryCondition.from_vector_field(v, grid)
+    u = poisson_multigrid(div_v, bcond, h1.item(), depth=multigrid_depth, tol=tol, maxiter=maxiter)
+    return u
