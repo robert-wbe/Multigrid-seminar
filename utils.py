@@ -32,6 +32,21 @@ class BoundaryCondition:
 
     def restrict(self) -> BoundaryCondition:
         return BoundaryCondition(restrict(self.mask), restrict(self.vals))
+    
+    @staticmethod
+    def empty_for_grid(grid: torch.Tensor) -> BoundaryCondition:
+        return BoundaryCondition(torch.full_like(grid, False), torch.zeros_like(grid))
+    
+    @staticmethod
+    def empty_w_size(size) -> BoundaryCondition:
+        return BoundaryCondition(torch.full(size, False), torch.zeros(size))
+    
+    def __setitem__(self, accessor, value):
+        self.mask[accessor] = True
+        self.vals[accessor] = value
+
+    def mean(self) -> torch.Tensor:
+        return self.vals[self.mask].mean()
 
 @dataclass
 class NeumannBoundaryCondition:
