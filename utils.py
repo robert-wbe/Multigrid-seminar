@@ -5,48 +5,247 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from torchvision.transforms.functional import pil_to_tensor
 from dataclasses import dataclass
+from typing import overload
 
 # convolutions
-def conv(g: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
-    return F.conv2d(g.unsqueeze(0), h.unsqueeze(0).unsqueeze(0))[0]
+def conv2d(g: torch.Tensor, h: torch.Tensor, stride=1) -> torch.Tensor:
+    return F.conv2d(g.unsqueeze(0), h.unsqueeze(0).unsqueeze(0), stride=stride)[0]
 
-def convT(g: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
+def convT2d(g: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
     return F.conv_transpose2d(g.unsqueeze(0), h.unsqueeze(0).unsqueeze(0), stride=2, padding=1)[0]
 
+def conv1d(g: torch.Tensor, h: torch.Tensor, stride=1) -> torch.Tensor:
+    return F.conv1d(g.unsqueeze(0), h.unsqueeze(0).unsqueeze(0), stride=stride)[0]
+
+def convT1d(g: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
+    return F.conv_transpose1d(g.unsqueeze(0), h.unsqueeze(0).unsqueeze(0), stride=2, padding=1)[0]
+
 # kernels
-interp_kernel = torch.tensor(((0.25, 0.5, 0.25), (0.5, 1., 0.5), (0.25, 0.5, 0.25)))
-neighbor_kernel = torch.tensor(((0., 0.25, 0.), (0.25, 0., 0.25), (0., 0.25, 0.)))
+interp_kernel_2d = torch.tensor(((0.25, 0.5, 0.25), (0.5, 1., 0.5), (0.25, 0.5, 0.25)))
+neighbor_kernel_2d = torch.tensor(((0., 0.25, 0.), (0.25, 0., 0.25), (0., 0.25, 0.)))
+restrict_kernel_2d = torch.tensor(((.0625, .125, .0625), (.125, .25, .125), (.0625, .125, .0625)))
+restrict_kernel_1d = torch.tensor((.25, .5, .25))
+
+# padding
+def reflection_pad_2d(f: torch.Tensor) -> torch.Tensor:
+    return F.pad(f.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode='reflect')[0, 0]
+
+def reflection_pad_1d(f: torch.Tensor) -> torch.Tensor:
+    return F.pad(f.unsqueeze(0).unsqueeze(0), (1, 1), mode='reflect')[0, 0]
+
+def repl_pad_2d(f: torch.Tensor) -> torch.Tensor:
+    return F.pad(f.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode='replicate')[0, 0]
+
+def repl_pad_1d(f: torch.Tensor) -> torch.Tensor:
+    return F.pad(f.unsqueeze(0).unsqueeze(0), (1, 1), mode='replicate')[0, 0]
+
+def zero_pad_2d(f: torch.Tensor) -> torch.Tensor:
+    return F.pad(f, (1, 1, 1, 1))
+
+def zero_pad_1d(f: torch.Tensor) -> torch.Tensor:
+    return F.pad(f, (1, 1))
 
 # up/downsampling
 def interpolate(f: torch.Tensor) -> torch.Tensor:
-    return convT(f, interp_kernel)
+    return convT2d(f, interp_kernel_2d)
 
-def restrict(f: torch.Tensor) -> torch.Tensor:
-    return f[::2, ::2]
+def restrict2d(f: torch.Tensor) -> torch.Tensor:
+    return conv2d(repl_pad_2d(f), restrict_kernel_2d, stride=2)
+
+def restrict2d_nopad(f: torch.Tensor) -> torch.Tensor:
+    return conv2d(f, restrict_kernel_2d, stride=2)
+
+def restrict1d(f: torch.Tensor) -> torch.Tensor:
+    return conv1d(repl_pad_1d(f), restrict_kernel_1d, stride=2)
+
+def restrict1d_nopad(f: torch.Tensor) -> torch.Tensor:
+    return conv1d(f, restrict_kernel_1d, stride=2)
+
+full_slice = slice(None, None, None)
+
+@dataclass
+class WeightedTensor:
+    weight: torch.Tensor
+    vals: torch.Tensor
+
+    def apply(self, other: torch.Tensor) -> torch.Tensor:
+        return (1-self.weight) * other + self.weight * self.vals
+
+    def sum(self) -> torch.Tensor:
+        return torch.sum(self.weight * self.vals)
+    
+    def numel(self) -> torch.Tensor:
+        return torch.sum(self.weight)
+    
+    def __setitem__(self, accessor, value):
+        self.weight[accessor] = 1
+        self.vals[accessor] = value
+
+    def __getitem__(self, key):
+        return self.vals[key]
+    
+    def restrict(self) -> WeightedTensor:
+        match self.vals.ndim:
+            case 1:
+                return WeightedTensor(restrict1d(self.weight), restrict1d(self.vals))
+            case 2:
+                return WeightedTensor(restrict2d(self.weight), restrict2d(self.vals))
+            case _:
+                raise NotImplementedError()
+    
+    def restrict_nopad(self) -> WeightedTensor:
+        match self.vals.ndim:
+            case 1:
+                return WeightedTensor(restrict1d_nopad(self.weight), restrict1d_nopad(self.vals))
+            case 2:
+                return WeightedTensor(restrict2d_nopad(self.weight), restrict2d_nopad(self.vals))
+            case _:
+                raise NotImplementedError()
+    
+    def repl_pad(self) -> WeightedTensor:
+        match self.vals.ndim:
+            case 1:
+                return WeightedTensor(repl_pad_1d(self.weight), repl_pad_1d(self.vals))
+            case 2:
+                return WeightedTensor(repl_pad_2d(self.weight), repl_pad_2d(self.vals))
+            case _:
+                raise NotImplementedError()
+
+    @staticmethod
+    def empty_w_size(*size) -> WeightedTensor:
+        return WeightedTensor(torch.zeros(*size), torch.zeros(*size))
 
 # boundary conditions
 @dataclass
-class BoundaryCondition:
-    mask: torch.Tensor
-    vals: torch.Tensor
+class DirichletBoundaryCondition:
+    _inner: WeightedTensor
+    _left: WeightedTensor
+    _right: WeightedTensor
+    _bottom: WeightedTensor
+    _top: WeightedTensor
 
-    def restrict(self) -> BoundaryCondition:
-        return BoundaryCondition(restrict(self.mask), restrict(self.vals))
+    def restrict(self) -> DirichletBoundaryCondition:
+        return DirichletBoundaryCondition(
+            self.full().restrict_nopad(),
+            self.left.restrict(),
+            self.right.restrict(),
+            self.bottom.restrict(),
+            self.top.restrict(),
+        )
     
     @staticmethod
-    def empty_for_grid(grid: torch.Tensor) -> BoundaryCondition:
-        return BoundaryCondition(torch.full_like(grid, False), torch.zeros_like(grid))
-    
+    def empty_w_size(height, width) -> DirichletBoundaryCondition:
+        return DirichletBoundaryCondition(
+            WeightedTensor.empty_w_size(height, width),
+            WeightedTensor.empty_w_size(height),
+            WeightedTensor.empty_w_size(height),
+            WeightedTensor.empty_w_size(width),
+            WeightedTensor.empty_w_size(width)
+        )
+
     @staticmethod
-    def empty_w_size(size) -> BoundaryCondition:
-        return BoundaryCondition(torch.full(size, False), torch.zeros(size))
+    def empty_for_grid(grid: torch.Tensor) -> DirichletBoundaryCondition:
+        return DirichletBoundaryCondition.empty_w_size(*grid.shape)
     
     def __setitem__(self, accessor, value):
-        self.mask[accessor] = True
-        self.vals[accessor] = value
+        self._inner[accessor] = value
 
     def mean(self) -> torch.Tensor:
-        return self.vals[self.mask].mean()
+        sumel = (self._inner.sum() + self._left.sum() + self._right.sum() + self._bottom.sum() + self._top.sum())
+        numel = (self._inner.numel() + self._left.numel() + self._right.numel() + self._bottom.numel() + self._top.numel())
+        return sumel / numel
+    
+    def apply_inner(self, grid: torch.Tensor) -> torch.Tensor:
+        return self._inner.apply(grid)
+    
+    def full(self) -> WeightedTensor:
+        vals = zero_pad_2d(self._inner.vals)
+        weight = zero_pad_2d(self._inner.weight)
+        vals[0, 1:-1] = self._bottom.vals
+        weight[0, 1:-1] = self._bottom.weight
+        vals[-1, 1:-1] = self._top.vals
+        weight[-1, 1:-1] = self._top.weight
+        vals[1:-1, 0] = self._left.vals
+        weight[1:-1, 0] = self._left.weight
+        vals[1:-1, -1] = self._right.vals
+        weight[1:-1, -1] = self._right.weight
+        vals[0, 0] = 0.5*(vals[0, 1]+vals[1, 0])
+        weight[0, 0] = 0.5*(weight[0, 1]+weight[1, 0])
+        vals[0, -1] = 0.5*(vals[0, -2]+vals[1, -1])
+        weight[0, -1] = 0.5*(weight[0, -2]+weight[1, -1])
+        vals[-1, 0] = 0.5*(vals[-1, 1]+vals[-2, 0])
+        weight[-1, 0] = 0.5*(weight[-1, 1]+weight[-2, 0])
+        vals[-1, -1] = 0.5*(vals[-1, -2]+vals[-2, -1])
+        weight[-1, -1] = 0.5*(weight[-1, -2]+weight[-2, -1])
+        return WeightedTensor(weight, vals)
+    
+    def boundary_pad(self, grid: torch.Tensor) -> torch.Tensor:
+        refl = reflection_pad_2d(grid)
+        refl[0, 1:-1] = self._bottom.apply(refl[0, 1:-1])
+        refl[-1, 1:-1] = self._top.apply(refl[-1, 1:-1])
+        refl[1:-1, 0] = self._left.apply(refl[1:-1, 0])
+        refl[1:-1, -1] = self._right.apply(refl[1:-1, -1])
+        return refl
+
+    def apply_full(self, grid: torch.Tensor) -> torch.Tensor:
+        return self.full().apply(grid)
+    
+    @property
+    def left(self) -> WeightedTensor:
+        return self._left
+    @left.setter
+    def left(self, value):
+        self._left[full_slice] = value
+    
+    @property
+    def right(self) -> WeightedTensor:
+        return self._right
+    @right.setter
+    def right(self, value):
+        self._right[full_slice] = value
+    
+    @property
+    def bottom(self) -> WeightedTensor:
+        return self._bottom
+    @bottom.setter
+    def bottom(self, value):
+        self._bottom[full_slice] = value
+    
+    @property
+    def top(self) -> WeightedTensor:
+        return self._top
+    @top.setter
+    def top(self, value):
+        self._top[full_slice] = value
+    
+    def show(self, ax=None):
+        if not ax:
+            ax = plt
+        full = self.full()
+        ax.imshow(full.vals, origin='lower', alpha=full.weight)
+        if not ax:
+            plt.show()
+    
+    def smoothen(self, grid: torch.Tensor) -> torch.Tensor:
+        smoothed = conv2d(self.boundary_pad(grid), neighbor_kernel_2d)
+        return self.apply_inner(smoothed)
+    
+    def add_square(self, width, height, value, center=None, cx=None, cy=None, left=None, right=None, top=None, bottom=None):
+        assert center is not None or (cx and cy) or ((left or right) and (bottom or top))
+        if center is not None:
+            cx, cy = center
+        if (cx and cy):
+            left = cx - width // 2
+            bottom = cy - height // 2
+        if right:
+            left = right - width
+        if top:
+            bottom = top - height
+        
+        self[bottom:bottom+height, left:left+width] = value
+
+            
+
 
 @dataclass
 class NeumannBoundaryCondition:
@@ -76,19 +275,11 @@ def neumann_nd(bc: NeumannBoundaryCondition) -> torch.Tensor:
     nd[:, -1] += bc.right
     return nd
 
-
-
-def reflection_pad(f: torch.Tensor) -> torch.Tensor:
-    return F.pad(f.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode='reflect')[0, 0]
-
-def repl_pad(f: torch.Tensor) -> torch.Tensor:
-    return F.pad(f.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode='replicate')[0, 0]
-
 def laplace_smoothen(f: torch.Tensor) -> torch.Tensor:
-    return conv(reflection_pad(f), neighbor_kernel)
+    return conv2d(reflection_pad_2d(f), neighbor_kernel_2d)
 
 def poisson_smoothen(u: torch.Tensor, f: torch.Tensor, bc: NeumannBoundaryCondition, h: float) -> torch.Tensor:
-    return conv(repl_pad(u), neighbor_kernel) + (h / 4) * neumann_nd(bc) - (h**2) * f
+    return conv2d(repl_pad_2d(u), neighbor_kernel_2d) + (h / 4) * neumann_nd(bc) - (h**2) * f
 
 def open_image(fname: str) -> torch.Tensor:
     img = Image.open(fname)
@@ -98,6 +289,6 @@ if __name__ == '__main__':
     test = torch.randn(3, 3)
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
     ax1.imshow(test, vmin=test.min(), vmax=test.max())
-    ax2.imshow(reflection_pad(test), vmin=test.min(), vmax=test.max())
+    ax2.imshow(reflection_pad_2d(test), vmin=test.min(), vmax=test.max())
     ax3.imshow(laplace_smoothen(test), vmin=test.min(), vmax=test.max())
     plt.show()
