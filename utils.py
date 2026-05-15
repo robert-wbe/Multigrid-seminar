@@ -46,8 +46,17 @@ def zero_pad_1d(f: torch.Tensor) -> torch.Tensor:
     return F.pad(f, (1, 1))
 
 # up/downsampling
-def interpolate(f: torch.Tensor) -> torch.Tensor:
-    return convT2d(f, interp_kernel_2d)
+def even_pad(f: torch.Tensor, pad_h=True, pad_w=True) -> torch.Tensor:
+    kernel = torch.ones(2 if pad_h else 3, 2 if pad_w else 3)
+    kernel /= kernel.sum()
+    return conv2d(repl_pad_2d(f), kernel)
+
+def interpolate(f: torch.Tensor, og_shape=None) -> torch.Tensor:
+    upconv = convT2d(f, interp_kernel_2d)
+    if og_shape is None: return upconv
+    og_h, og_w = og_shape
+    if og_h%2 and og_w%2: return upconv
+    return even_pad(upconv, not og_h%2, not og_w%2)
 
 def restrict2d(f: torch.Tensor) -> torch.Tensor:
     return conv2d(repl_pad_2d(f), restrict_kernel_2d, stride=2)
