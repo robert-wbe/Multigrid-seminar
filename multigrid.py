@@ -8,12 +8,14 @@ import numpy as np
 
 
 
-def laplace_jacobi_step(f: torch.Tensor, bc: DirichletBoundaryCondition):
-    return bc.smoothen(f)
+def laplace_jacobi_step(f: torch.Tensor, bc: DirichletBoundaryCondition, damping_factor=1.0):
+    if damping_factor == 1.0:
+        return bc.smoothen(f)
+    return (1-damping_factor) * f + damping_factor * bc.smoothen(f)
 
-def laplace_jacobi_smoothen(f: torch.Tensor, bc: DirichletBoundaryCondition, tol=1e-3, maxiter=200) -> torch.Tensor:
+def laplace_jacobi_smoothen(f: torch.Tensor, bc: DirichletBoundaryCondition, damping_factor=1.0, tol=1e-3, maxiter=200) -> torch.Tensor:
     for _ in range(maxiter):
-        f_smooth = laplace_jacobi_step(f, bc)
+        f_smooth = laplace_jacobi_step(f, bc, damping_factor)
         if torch.mean(torch.abs(f - f_smooth)) <= tol:
             return f_smooth
         f = f_smooth
@@ -38,46 +40,46 @@ def poisson_exact_solve(f: torch.Tensor, bc: NeumannBoundaryCondition, h: float,
 ### Laplace Solvers ###
 
 # V-Cycle
-def laplace_multigrid_v_cycle(f: torch.Tensor, bc: DirichletBoundaryCondition, depth=4, tol=1e-5, maxiter=200) -> torch.Tensor:
+def laplace_multigrid_v_cycle(f: torch.Tensor, bc: DirichletBoundaryCondition, depth=4, damping_factor=1.0, tol=1e-5, maxiter=200) -> torch.Tensor:
     if not depth:
-        return laplace_jacobi_smoothen(f, bc, tol, maxiter)
-    f = laplace_jacobi_smoothen(f, bc, tol, maxiter)
-    f = interpolate(laplace_multigrid_v_cycle(restrict2d(f), bc.restrict(), depth-1, tol, maxiter))
-    f = laplace_jacobi_smoothen(f, bc, tol, maxiter)
+        return laplace_jacobi_smoothen(f, bc, damping_factor, tol, maxiter)
+    f = laplace_jacobi_smoothen(f, bc, damping_factor, tol, maxiter)
+    f = interpolate(laplace_multigrid_v_cycle(restrict2d(f), bc.restrict(), depth-1, damping_factor, tol, maxiter))
+    f = laplace_jacobi_smoothen(f, bc, damping_factor, tol, maxiter)
     return f
 
-def laplace_multigrid_half_v_cycle(f: torch.Tensor, bc: DirichletBoundaryCondition, depth=4, tol=1e-5, maxiter=200) -> torch.Tensor:
+def laplace_multigrid_half_v_cycle(f: torch.Tensor, bc: DirichletBoundaryCondition, depth=4, damping_factor=1.0, tol=1e-5, maxiter=200) -> torch.Tensor:
     if not depth:
-        return laplace_jacobi_smoothen(f, bc, tol, maxiter)
-    f = interpolate(laplace_multigrid_half_v_cycle(restrict2d(f), bc.restrict(), depth-1, tol, maxiter))
-    f = laplace_jacobi_smoothen(f, bc, tol, maxiter)
+        return laplace_jacobi_smoothen(f, bc, damping_factor, tol, maxiter)
+    f = interpolate(laplace_multigrid_half_v_cycle(restrict2d(f), bc.restrict(), depth-1, damping_factor, tol, maxiter))
+    f = laplace_jacobi_smoothen(f, bc, damping_factor, tol, maxiter)
     return f
 
 # F-Cycle
-def laplace_multigrid_f_cycle(f: torch.Tensor, bc: DirichletBoundaryCondition, depth=4, tol=1e-5, maxiter=200) -> torch.Tensor:
+def laplace_multigrid_f_cycle(f: torch.Tensor, bc: DirichletBoundaryCondition, depth=4, damping_factor=1.0, tol=1e-5, maxiter=200) -> torch.Tensor:
     if not depth:
-        return laplace_jacobi_smoothen(f, bc, tol, maxiter)
-    f = laplace_jacobi_smoothen(f, bc, tol, maxiter)
-    f = interpolate(laplace_multigrid_f_cycle(restrict2d(f), bc.restrict(), depth-1, tol, maxiter))
-    f = laplace_multigrid_v_cycle(f, bc, depth, tol, maxiter)
+        return laplace_jacobi_smoothen(f, bc, damping_factor, tol, maxiter)
+    f = laplace_jacobi_smoothen(f, bc, damping_factor, tol, maxiter)
+    f = interpolate(laplace_multigrid_f_cycle(restrict2d(f), bc.restrict(), depth-1, damping_factor, tol, maxiter))
+    f = laplace_multigrid_v_cycle(f, bc, depth, damping_factor, tol, maxiter)
     return f
 
 # W-Cycle
-def laplace_multigrid_w_cycle(f: torch.Tensor, bc: DirichletBoundaryCondition, depth=4, tol=1e-5, maxiter=200) -> torch.Tensor:
+def laplace_multigrid_w_cycle(f: torch.Tensor, bc: DirichletBoundaryCondition, depth=4, damping_factor=1.0, tol=1e-5, maxiter=200) -> torch.Tensor:
     if not depth:
-        return laplace_jacobi_smoothen(f, bc, tol, maxiter)
-    f = laplace_jacobi_smoothen(f, bc, tol, maxiter)
-    f = laplace_multigrid_w_cycle(restrict2d(f), bc.restrict(), depth-1, tol, maxiter)
-    f = interpolate(laplace_multigrid_w_cycle(f, bc.restrict(), depth-1, tol, maxiter))
-    f = laplace_jacobi_smoothen(f, bc, tol, maxiter)
+        return laplace_jacobi_smoothen(f, bc, damping_factor, tol, maxiter)
+    f = laplace_jacobi_smoothen(f, bc, damping_factor, tol, maxiter)
+    f = laplace_multigrid_w_cycle(restrict2d(f), bc.restrict(), depth-1, damping_factor, tol, maxiter)
+    f = interpolate(laplace_multigrid_w_cycle(f, bc.restrict(), depth-1, damping_factor, tol, maxiter))
+    f = laplace_jacobi_smoothen(f, bc, damping_factor, tol, maxiter)
     return f
 
 # Full Multigrid V-Cycle
-def laplace_full_multigrid_v_cycle(f: torch.Tensor, bc: DirichletBoundaryCondition, depth=4, tol=1e-5, maxiter=200) -> torch.Tensor:
+def laplace_full_multigrid_v_cycle(f: torch.Tensor, bc: DirichletBoundaryCondition, depth=4, damping_factor=1.0, tol=1e-5, maxiter=200) -> torch.Tensor:
     if not depth:
-        return laplace_jacobi_smoothen(f, bc, tol, maxiter)
-    f = interpolate(laplace_full_multigrid_v_cycle(restrict2d(f), bc.restrict(), depth-1, tol, maxiter))
-    f = laplace_multigrid_v_cycle(f, bc, depth, tol, maxiter)
+        return laplace_jacobi_smoothen(f, bc, damping_factor, tol, maxiter)
+    f = interpolate(laplace_full_multigrid_v_cycle(restrict2d(f), bc.restrict(), depth-1, damping_factor, tol, maxiter))
+    f = laplace_multigrid_v_cycle(f, bc, depth, damping_factor, tol, maxiter)
     return f
 
 

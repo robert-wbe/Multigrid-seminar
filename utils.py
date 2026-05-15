@@ -228,8 +228,8 @@ class DirichletBoundaryCondition:
         smoothed = conv2d(self.boundary_pad(grid), neighbor_kernel_2d)
         return self.apply_inner(smoothed)
     
-    def add_square(self, width, height, value, center=None, cx=None, cy=None, left=None, right=None, top=None, bottom=None):
-        assert center is not None or (cx and cy) or ((left or right) and (bottom or top))
+    def add_rectangle(self, width, height, value, center=None, cx=None, cy=None, left=None, right=None, top=None, bottom=None):
+        assert center is not None or (cx is not None and cy is not None) or ((left is not None or right is not None) and (bottom is not None or top is not None))
         if center is not None:
             cx, cy = center
         if (cx and cy):
