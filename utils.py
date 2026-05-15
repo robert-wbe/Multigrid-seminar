@@ -87,18 +87,18 @@ class WeightedTensor:
     def restrict(self) -> WeightedTensor:
         match self.vals.ndim:
             case 1:
-                return WeightedTensor(restrict1d(self.weight), restrict1d(self.vals))
+                return WeightedTensor(restrict1d(self.weight), (restrict1d(self.vals * self.weight) / restrict1d(self.weight)).nan_to_num(0))
             case 2:
-                return WeightedTensor(restrict2d(self.weight), restrict2d(self.vals))
+                return WeightedTensor(restrict2d(self.weight), (restrict2d(self.vals * self.weight) / restrict2d(self.weight)).nan_to_num(0))
             case _:
                 raise NotImplementedError()
     
     def restrict_nopad(self) -> WeightedTensor:
         match self.vals.ndim:
             case 1:
-                return WeightedTensor(restrict1d_nopad(self.weight), restrict1d_nopad(self.vals))
+                return WeightedTensor(restrict1d_nopad(self.weight), (restrict1d_nopad(self.vals * self.weight) / restrict1d_nopad(self.weight)).nan_to_num(0))
             case 2:
-                return WeightedTensor(restrict2d_nopad(self.weight), restrict2d_nopad(self.vals))
+                return WeightedTensor(restrict2d_nopad(self.weight), (restrict2d_nopad(self.vals * self.weight) / restrict2d_nopad(self.weight)).nan_to_num(0))
             case _:
                 raise NotImplementedError()
     
@@ -223,8 +223,6 @@ class DirichletBoundaryCondition:
             ax = plt
         full = self.full()
         ax.imshow(full.vals, origin='lower', alpha=full.weight)
-        if not ax:
-            plt.show()
     
     def smoothen(self, grid: torch.Tensor) -> torch.Tensor:
         smoothed = conv2d(self.boundary_pad(grid), neighbor_kernel_2d)
