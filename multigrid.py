@@ -13,6 +13,7 @@ def laplace_jacobi_step(f: torch.Tensor, bc: DirichletBoundaryCondition, damping
         return bc.smoothen(f)
     return (1-damping_factor) * f + damping_factor * bc.smoothen(f)
 
+
 def laplace_jacobi_smoothen(f: torch.Tensor, bc: DirichletBoundaryCondition, damping_factor=1.0, tol=1e-3, maxiter=200) -> torch.Tensor:
     for _ in range(maxiter):
         f_smooth = laplace_jacobi_step(f, bc, damping_factor)
