@@ -10,18 +10,22 @@ from torchvision.transforms.functional import pil_to_tensor
 from dataclasses import dataclass
 from typing import overload
 
+def expand_to_nd(t: torch.Tensor, n: int) -> torch.Tensor:
+    if n <= t.ndim: return t
+    return t.reshape((1,)*(n-t.ndim) + t.shape)
+
 # convolutions
 def conv2d(g: torch.Tensor, h: torch.Tensor, stride=1) -> torch.Tensor:
-    return F.conv2d(g.unsqueeze(0), h.unsqueeze(0).unsqueeze(0), stride=stride)[0]
+    return F.conv2d(expand_to_nd(g, 3), expand_to_nd(h, 4), stride=stride)[0]
 
 def convT2d(g: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
-    return F.conv_transpose2d(g.unsqueeze(0), h.unsqueeze(0).unsqueeze(0), stride=2, padding=1)[0]
+    return F.conv_transpose2d(expand_to_nd(g, 3), expand_to_nd(h, 4), stride=2, padding=1)[0]
 
 def conv1d(g: torch.Tensor, h: torch.Tensor, stride=1) -> torch.Tensor:
-    return F.conv1d(g.unsqueeze(0), h.unsqueeze(0).unsqueeze(0), stride=stride)[0]
+    return F.conv1d(expand_to_nd(g, 3), expand_to_nd(h, 3), stride=stride)[0]
 
 def convT1d(g: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
-    return F.conv_transpose1d(g.unsqueeze(0), h.unsqueeze(0).unsqueeze(0), stride=2, padding=1)[0]
+    return F.conv_transpose1d(expand_to_nd(g, 3), expand_to_nd(h, 4), stride=2, padding=1)[0]
 
 # kernels
 interp_kernel_2d = torch.tensor(((0.25, 0.5, 0.25), (0.5, 1., 0.5), (0.25, 0.5, 0.25)))
@@ -47,6 +51,13 @@ def zero_pad_2d(f: torch.Tensor) -> torch.Tensor:
 
 def zero_pad_1d(f: torch.Tensor) -> torch.Tensor:
     return F.pad(f, (1, 1))
+
+# other
+
+def lerp(t1: torch.Tensor, t2: torch.Tensor, n: int = 16) -> torch.Tensor:
+    assert t1.shape == t2.shape
+    t = torch.linspace(0, 1, n).reshape([n] + [1]*t1.ndim)
+    return (1-t)*t1 + t*t2
 
 # up/downsampling
 def even_pad(f: torch.Tensor, pad_h=True, pad_w=True) -> torch.Tensor:
@@ -254,7 +265,8 @@ class DirichletBoundaryCondition:
         
         self[bottom:bottom+height, left:left+width] = value
 
-            
+class CylinderBoundaryCondition:
+    pass
 
 
 @dataclass
